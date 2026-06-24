@@ -1,0 +1,158 @@
+{
+  "info": {
+    "name": "Vaishnavi Group Help Desk API",
+    "description": "Import and set the `baseUrl` variable. Run 'Auth > Login' first — it auto-saves accessToken/refreshToken to collection variables used by the other requests.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:5001/api/v1" },
+    { "key": "accessToken", "value": "" },
+    { "key": "refreshToken", "value": "" },
+    { "key": "ticketId", "value": "" }
+  ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{accessToken}}", "type": "string" }]
+  },
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Signup",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/signup",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Test User\",\n  \"email\": \"test@example.com\",\n  \"password\": \"Password@123\"\n}" }
+          }
+        },
+        {
+          "name": "Verify OTP",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/verify-otp",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"test@example.com\",\n  \"otp\": \"000000\"\n}" }
+          }
+        },
+        {
+          "name": "Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const d = pm.response.json().data;",
+                  "if (d) {",
+                  "  pm.collectionVariables.set('accessToken', d.accessToken);",
+                  "  pm.collectionVariables.set('refreshToken', d.refreshToken);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/login",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"admin@helpdesk.com\",\n  \"password\": \"Password@123\"\n}" }
+          }
+        },
+        {
+          "name": "Refresh",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/refresh",
+            "body": { "mode": "raw", "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}" }
+          }
+        },
+        { "name": "Profile", "request": { "method": "GET", "url": "{{baseUrl}}/auth/profile" } },
+        {
+          "name": "Forgot Password",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/forgot-password",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"admin@helpdesk.com\"\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tickets",
+      "item": [
+        { "name": "List tickets", "request": { "method": "GET", "url": "{{baseUrl}}/tickets?page=1&limit=10" } },
+        {
+          "name": "Create ticket",
+          "event": [
+            { "listen": "test", "script": { "exec": ["const d=pm.response.json().data; if(d) pm.collectionVariables.set('ticketId', d.id);"], "type": "text/javascript" } }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/tickets",
+            "body": { "mode": "raw", "raw": "{\n  \"title\": \"Sample issue from Postman\",\n  \"description\": \"<p>Describe the problem here.</p>\",\n  \"categoryId\": \"PASTE_CATEGORY_ID\",\n  \"priority\": \"MEDIUM\"\n}" }
+          }
+        },
+        { "name": "Get ticket", "request": { "method": "GET", "url": "{{baseUrl}}/tickets/{{ticketId}}" } },
+        {
+          "name": "Change status",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/tickets/{{ticketId}}/status",
+            "body": { "mode": "raw", "raw": "{\n  \"status\": \"IN_PROGRESS\"\n}" }
+          }
+        },
+        { "name": "Auto-assign", "request": { "method": "POST", "url": "{{baseUrl}}/tickets/{{ticketId}}/auto-assign" } }
+      ]
+    },
+    {
+      "name": "Comments",
+      "item": [
+        { "name": "List comments", "request": { "method": "GET", "url": "{{baseUrl}}/comments/ticket/{{ticketId}}" } },
+        {
+          "name": "Add reply",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/comments/ticket/{{ticketId}}",
+            "body": { "mode": "raw", "raw": "{\n  \"message\": \"Thanks, looking into it.\",\n  \"visibility\": \"PUBLIC\"\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Categories",
+      "item": [
+        { "name": "List", "request": { "method": "GET", "url": "{{baseUrl}}/categories" } },
+        {
+          "name": "Create",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/categories",
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Department\",\n  \"description\": \"Department-related queries\"\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Knowledge Base",
+      "item": [
+        { "name": "List articles", "request": { "method": "GET", "url": "{{baseUrl}}/knowledge-base" } }
+      ]
+    },
+    {
+      "name": "Reports",
+      "item": [
+        { "name": "Agent performance", "request": { "method": "GET", "url": "{{baseUrl}}/reports/agent-performance?duration=all" } },
+        { "name": "Export (CSV)", "request": { "method": "GET", "url": "{{baseUrl}}/reports/export?type=agent-performance&format=csv" } }
+      ]
+    },
+    { "name": "Dashboard", "item": [ { "name": "Stats", "request": { "method": "GET", "url": "{{baseUrl}}/dashboard" } } ] }
+  ]
+}

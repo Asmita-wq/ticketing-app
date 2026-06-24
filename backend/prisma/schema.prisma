@@ -1,0 +1,492 @@
+// ============================================================
+// Help Desk / Ticketing System - Prisma Schema
+// ============================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------------
+// ENUMS
+// ------------------------------------------------------------
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  SUPPORT_AGENT
+  USER
+}
+
+enum TicketStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  PENDING_USER
+  RESOLVED
+  CLOSED
+  REOPENED
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum CommentVisibility {
+  PUBLIC      // visible to ticket owner + staff
+  INTERNAL    // staff-only note
+}
+
+enum NotificationType {
+  TICKET_CREATED
+  TICKET_ASSIGNED
+  STATUS_CHANGED
+  COMMENT_ADDED
+  TICKET_RESOLVED
+  TICKET_CLOSED
+  SLA_BREACH
+  TICKET_ESCALATED
+}
+
+enum AuditAction {
+  TICKET_CREATED
+  TICKET_UPDATED
+  TICKET_ASSIGNED
+  TICKET_STATUS_CHANGED
+  TICKET_PRIORITY_CHANGED
+  TICKET_MERGED
+  TICKET_ESCALATED
+  TICKET_CLOSED
+  TICKET_REOPENED
+  COMMENT_ADDED
+  USER_CREATED
+  USER_UPDATED
+  USER_DISABLED
+  CATEGORY_ASSIGNEE_CHANGED
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  PASSWORD_RESET
+}
+
+// ------------------------------------------------------------
+// USERS & AUTH
+// ------------------------------------------------------------
+
+model User {
+  id              String   @id @default(uuid())
+  name            String
+  email           String   @unique
+  password        String
+  phone           String?
+  role            UserRole @default(USER)
+  isActive        Boolean  @default(true)
+  emailVerified   Boolean  @default(false)
+  mustChangePassword Boolean @default(false)
+  avatarUrl       String?
+  department      String?
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  ticketsCreated      Ticket[]            @relation("TicketCreatedBy")
+  ticketsAssigned     Ticket[]            @relation("TicketAssignedTo")
+  comments            TicketComment[]
+  attachments         TicketAttachment[]
+  assignmentsGiven    TicketAssignment[]  @relation("AssignedBy")
+  assignmentsReceived TicketAssignment[]  @relation("AssignedTo")
+  notifications       Notification[]
+  refreshTokens       RefreshToken[]
+  auditLogs           AuditLog[]
+  kbArticlesAuthored  KnowledgeBaseArticle[]
+  statusHistoryChanged TicketStatusHistory[]
+  categoryAgents      CategoryAgent[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("refresh_tokens")
+}
+
+model PasswordResetToken {
+  id        String   @id @default(uuid())
+  email     String
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@map("password_reset_tokens")
+}
+
+model EmailOtp {
+  id        String   @id @default(uuid())
+  email     String
+  otp       String
+  purpose   String   @default("SIGNUP")
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([email])
+  @@map("email_otps")
+}
+
+// ------------------------------------------------------------
+// CATEGORIES
+// ------------------------------------------------------------
+
+model Category {
+  id            String          @id @default(uuid())
+  name          String          @unique
+  description   String?
+  subcategories Subcategory[]
+  tickets       Ticket[]
+  agents        CategoryAgent[]
+  createdAt     DateTime        @default(now())
+
+  @@map("categories")
+}
+
+// Many-to-many: a category can have multiple default agents (load balancing)
+model CategoryAgent {
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@id([categoryId, userId])
+  @@map("category_agents")
+}
+
+// Singleton application settings (mandatory fields + custom labels)
+model AppSetting {
+  id                  String   @id @default("singleton")
+  requireContactPhone Boolean  @default(true)
+  requireContactEmail Boolean  @default(true)
+  requireCategory     Boolean  @default(true)
+  requireSubcategory  Boolean  @default(true)
+  requireContactName  Boolean  @default(true)
+  categoryLabel       String   @default("Category")
+  subcategoryLabel    String   @default("Subcategory")
+  updatedAt           DateTime @updatedAt
+
+  @@map("app_settings")
+}
+
+// Admin-defined extra fields shown on the ticket form
+model CustomField {
+  id        String   @id @default(uuid())
+  label     String
+  required  Boolean  @default(false)
+  active    Boolean  @default(true)
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@map("custom_fields")
+}
+
+model Subcategory {
+  id         String   @id @default(uuid())
+  name       String
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  tickets    Ticket[]
+  createdAt  DateTime @default(now())
+
+  @@unique([categoryId, name])
+  @@map("subcategories")
+}
+
+// ------------------------------------------------------------
+// TICKETS
+// ------------------------------------------------------------
+
+model Ticket {
+  id              String         @id @default(uuid())
+  ticketNumber    String         @unique // e.g. TKT-2026-000123
+  title           String
+  description     String         @db.Text
+  status          TicketStatus   @default(OPEN)
+  priority        TicketPriority @default(MEDIUM)
+
+  categoryId      String
+  category        Category       @relation(fields: [categoryId], references: [id])
+  subcategoryId   String?
+  subcategory     Subcategory?   @relation(fields: [subcategoryId], references: [id])
+
+  contactName     String?
+  contactEmail    String?
+  contactPhone    String?
+  company         String?
+  customData      Json?          // values for admin-defined custom fields, keyed by field id
+
+  createdById     String
+  createdBy       User           @relation("TicketCreatedBy", fields: [createdById], references: [id])
+
+  assignedToId    String?
+  assignedTo      User?          @relation("TicketAssignedTo", fields: [assignedToId], references: [id])
+
+  // SLA tracking
+  responseDueAt    DateTime?
+  resolutionDueAt  DateTime?
+  firstRespondedAt DateTime?
+  resolvedAt       DateTime?
+  closedAt         DateTime?
+  responseBreached   Boolean @default(false)
+  resolutionBreached Boolean @default(false)
+
+  // Escalation
+  escalated       Boolean        @default(false)
+  escalatedAt     DateTime?
+  escalationNote  String?
+
+  // Merge support
+  mergedIntoId    String?
+  mergedInto      Ticket?        @relation("TicketMerge", fields: [mergedIntoId], references: [id])
+  mergedTickets   Ticket[]       @relation("TicketMerge")
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  // Email threading
+  emailMessageId  String?        // RFC 822 Message-ID of the original inbound email
+  emailSubject    String?        // Original email subject (for threaded replies)
+
+  comments        TicketComment[]
+  attachments     TicketAttachment[]
+  assignments     TicketAssignment[]
+  statusHistory   TicketStatusHistory[]
+  notifications   Notification[]
+  emailMessages   TicketEmailMessage[]
+
+  @@index([status])
+  @@index([priority])
+  @@index([createdById])
+  @@index([assignedToId])
+  @@index([categoryId])
+  @@map("tickets")
+}
+
+// Tracks every Message-ID (inbound + outbound) in a ticket's email thread
+model TicketEmailMessage {
+  id        String   @id @default(uuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  messageId String   // RFC 822 Message-ID header value
+  direction String   // "inbound" or "outbound"
+  createdAt DateTime @default(now())
+
+  @@index([ticketId])
+  @@index([messageId])
+  @@map("ticket_email_messages")
+}
+
+model TicketStatusHistory {
+  id          String       @id @default(uuid())
+  ticketId    String
+  ticket      Ticket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  fromStatus  TicketStatus?
+  toStatus    TicketStatus
+  changedById String
+  changedBy   User         @relation(fields: [changedById], references: [id])
+  note        String?
+  createdAt   DateTime     @default(now())
+
+  @@map("ticket_status_history")
+}
+
+model TicketComment {
+  id          String            @id @default(uuid())
+  ticketId    String
+  ticket      Ticket            @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  authorId    String
+  author      User              @relation(fields: [authorId], references: [id])
+  message     String            @db.Text
+  visibility  CommentVisibility @default(PUBLIC)
+
+  attachments TicketAttachment[]
+
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([ticketId])
+  @@map("ticket_comments")
+}
+
+model TicketAttachment {
+  id          String         @id @default(uuid())
+  ticketId    String
+  ticket      Ticket         @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  commentId   String?
+  comment     TicketComment? @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  uploadedById String
+  uploadedBy   User          @relation(fields: [uploadedById], references: [id])
+
+  fileName    String
+  filePath    String
+  fileType    String
+  fileSize    Int
+
+  createdAt   DateTime       @default(now())
+
+  @@index([ticketId])
+  @@map("ticket_attachments")
+}
+
+model TicketAssignment {
+  id           String   @id @default(uuid())
+  ticketId     String
+  ticket       Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  assignedToId String
+  assignedTo   User     @relation("AssignedTo", fields: [assignedToId], references: [id])
+
+  assignedById String
+  assignedBy   User     @relation("AssignedBy", fields: [assignedById], references: [id])
+
+  note         String?
+  createdAt    DateTime @default(now())
+
+  @@index([ticketId])
+  @@map("ticket_assignments")
+}
+
+// ------------------------------------------------------------
+// NOTIFICATIONS
+// ------------------------------------------------------------
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  message   String
+  ticketId  String?
+  ticket    Ticket?          @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  @@index([userId])
+  @@map("notifications")
+}
+
+// ------------------------------------------------------------
+// KNOWLEDGE BASE
+// ------------------------------------------------------------
+
+model KnowledgeBaseArticle {
+  id          String   @id @default(uuid())
+  title       String
+  slug        String   @unique
+  content     String   @db.Text
+  category    String
+  tags        String[]
+  isPublished Boolean  @default(true)
+
+  authorId    String
+  author      User     @relation(fields: [authorId], references: [id])
+
+  views       Int      @default(0)
+
+  attachments KbAttachment[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([category])
+  @@map("knowledge_base_articles")
+}
+
+model KbAttachment {
+  id        String                @id @default(uuid())
+  articleId String
+  article   KnowledgeBaseArticle  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  fileName  String
+  filePath  String
+  fileType  String
+  fileSize  Int
+  createdAt DateTime              @default(now())
+
+  @@map("kb_attachments")
+}
+
+// ------------------------------------------------------------
+// SLA CONFIGURATION
+// ------------------------------------------------------------
+
+model SLAConfiguration {
+  id                 String         @id @default(uuid())
+  priority           TicketPriority @unique
+  responseTimeMins   Int            // e.g. Critical = 60
+  resolutionTimeMins Int            // e.g. Critical = 240
+
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  @@map("sla_configurations")
+}
+
+// ------------------------------------------------------------
+// EMAIL MAILBOXES (multi-mailbox email-to-ticket)
+// ------------------------------------------------------------
+
+model EmailMailbox {
+  id              String   @id @default(uuid())
+  label           String
+  company         String   @default("")
+  mailbox         String   @unique
+  tenantId        String
+  clientId        String
+  clientSecret    String
+  isActive        Boolean  @default(true)
+  lastPolledAt    DateTime?
+  lastError       String?
+  ticketsCreated  Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("email_mailboxes")
+}
+
+// ------------------------------------------------------------
+// AUDIT LOGS
+// ------------------------------------------------------------
+
+model AuditLog {
+  id         String      @id @default(uuid())
+  action     AuditAction
+  entityType String      // e.g. "Ticket", "User"
+  entityId   String?
+
+  performedById String?
+  performedBy   User?     @relation(fields: [performedById], references: [id])
+
+  details    Json?
+  ipAddress  String?
+
+  createdAt  DateTime    @default(now())
+
+  @@index([entityType, entityId])
+  @@index([performedById])
+  @@map("audit_logs")
+}

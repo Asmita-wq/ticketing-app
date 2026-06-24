@@ -1,0 +1,32 @@
+import { Router } from 'express';
+import { authRoutes } from './auth.routes';
+import { userRoutes } from './user.routes';
+import { ticketRoutes } from './ticket.routes';
+import { commentRoutes } from './comment.routes';
+import { notificationRoutes } from './notification.routes';
+import { knowledgeBaseRoutes } from './knowledgeBase.routes';
+import { reportRoutes } from './report.routes';
+import { slaRoutes } from './sla.routes';
+import { auditLogRoutes } from './auditLog.routes';
+import { categoryRoutes } from './category.routes';
+import { dashboardRoutes } from './dashboard.routes';
+import { settingsRoutes } from './settings.routes';
+import { customFieldRoutes } from './customField.routes';
+import { emailMailboxRoutes } from './emailMailbox.routes';
+
+export const apiRouter = Router();
+
+apiRouter.use('/auth', authRoutes);
+apiRouter.use('/users', userRoutes);
+apiRouter.use('/tickets', ticketRoutes);
+apiRouter.use('/comments', commentRoutes);
+apiRouter.use('/notifications', notificationRoutes);
+apiRouter.use('/knowledge-base', knowledgeBaseRoutes);
+apiRouter.use('/reports', reportRoutes);
+apiRouter.use('/sla', slaRoutes);
+apiRouter.use('/audit-logs', auditLogRoutes);
+apiRouter.use('/categories', categoryRoutes);
+apiRouter.use('/dashboard', dashboardRoutes);
+apiRouter.use('/settings', settingsRoutes);
+apiRouter.use('/custom-fields', customFieldRoutes);
+apiRouter.use('/email-mailboxes', emailMailboxRoutes);

@@ -1,0 +1,615 @@
+openapi: 3.0.3
+info:
+  title: Vaishnavi Group Help Desk API
+  version: 1.0.0
+  description: >
+    REST API for the Help Desk / Ticketing system. All responses are JSON and
+    follow the envelope `{ "success": boolean, "data"?: ..., "message"?: string }`.
+    Paginated list endpoints additionally return `meta: { page, limit, total, totalPages }`.
+    Authenticate with a Bearer JWT access token obtained from `/auth/login`.
+servers:
+  - url: http://localhost:5001/api/v1
+    description: Local development
+  - url: https://YOUR_API_DOMAIN/api/v1
+    description: Production (replace with deployed API host)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string }
+    AuthTokens:
+      type: object
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        accessToken: { type: string }
+        refreshToken: { type: string }
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string, nullable: true }
+        role: { type: string, enum: [ADMIN, MANAGER, SUPPORT_AGENT, USER] }
+        isActive: { type: boolean }
+        emailVerified: { type: boolean }
+        department: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+    Ticket:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        ticketNumber: { type: string, example: TKT-2026-000123 }
+        title: { type: string }
+        description: { type: string, description: HTML rich text }
+        status: { type: string, enum: [OPEN, ASSIGNED, IN_PROGRESS, PENDING_USER, RESOLVED, CLOSED, REOPENED] }
+        priority: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+        escalated: { type: boolean }
+        category: { type: object }
+        createdBy: { type: object }
+        assignedTo: { type: object, nullable: true }
+        createdAt: { type: string, format: date-time }
+    Category:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        subcategories: { type: array, items: { type: object } }
+        defaultAssignee: { type: object, nullable: true }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/signup:
+    post:
+      tags: [Auth]
+      summary: Register a new user (sends an email OTP for verification)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                phone: { type: string }
+      responses:
+        '201':
+          description: Account created, verification required
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      email: { type: string }
+                      requiresVerification: { type: boolean }
+  /auth/verify-otp:
+    post:
+      tags: [Auth]
+      summary: Verify the signup OTP and receive tokens
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, otp]
+              properties:
+                email: { type: string, format: email }
+                otp: { type: string, minLength: 6, maxLength: 6 }
+      responses:
+        '200':
+          description: Verified
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/AuthTokens' }
+  /auth/resend-otp:
+    post:
+      tags: [Auth]
+      summary: Resend the signup OTP
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { description: OK }
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in and receive access + refresh tokens
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200':
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean }
+                  data: { $ref: '#/components/schemas/AuthTokens' }
+        '403': { description: 'EMAIL_NOT_VERIFIED — verify via OTP first', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Rotate the refresh token for a new access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200': { description: New tokens }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke a refresh token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200': { description: Logged out }
+  /auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Request a password-reset email (any role)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties: { email: { type: string, format: email } }
+      responses:
+        '200': { description: OK (always, to avoid email enumeration) }
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Reset password using the emailed token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token: { type: string }
+                password: { type: string, minLength: 8 }
+      responses:
+        '200': { description: Password reset }
+  /auth/profile:
+    get:
+      tags: [Auth]
+      summary: Get the current user's profile
+      responses:
+        '200': { description: Profile, content: { application/json: { schema: { type: object, properties: { success: { type: boolean }, data: { $ref: '#/components/schemas/User' } } } } } }
+    patch:
+      tags: [Auth]
+      summary: Update the current user's profile
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                phone: { type: string }
+                department: { type: string }
+      responses:
+        '200': { description: Updated }
+  /auth/change-password:
+    post:
+      tags: [Auth]
+      summary: Change password while logged in
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string, minLength: 8 }
+      responses:
+        '200': { description: Changed }
+
+  /tickets:
+    get:
+      tags: [Tickets]
+      summary: List tickets (users see only their own; staff see all)
+      parameters:
+        - { in: query, name: page, schema: { type: integer } }
+        - { in: query, name: limit, schema: { type: integer } }
+        - { in: query, name: status, schema: { type: string } }
+        - { in: query, name: priority, schema: { type: string } }
+        - { in: query, name: categoryId, schema: { type: string } }
+        - { in: query, name: assignedToId, schema: { type: string } }
+        - { in: query, name: search, schema: { type: string } }
+        - { in: query, name: sortBy, schema: { type: string } }
+        - { in: query, name: sortOrder, schema: { type: string, enum: [asc, desc] } }
+      responses:
+        '200': { description: Paginated tickets }
+    post:
+      tags: [Tickets]
+      summary: Create a ticket (staff may set onBehalfOfUserId)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, description, categoryId]
+              properties:
+                title: { type: string, minLength: 5 }
+                description: { type: string, minLength: 10, description: HTML }
+                categoryId: { type: string, format: uuid }
+                subcategoryId: { type: string, format: uuid }
+                priority: { type: string, enum: [LOW, MEDIUM, HIGH, CRITICAL] }
+                contactName: { type: string }
+                contactEmail: { type: string }
+                contactPhone: { type: string }
+                onBehalfOfUserId: { type: string, format: uuid, description: 'Staff only' }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { type: object, properties: { success: { type: boolean }, data: { $ref: '#/components/schemas/Ticket' } } } } } }
+  /tickets/{id}:
+    get:
+      tags: [Tickets]
+      summary: Get ticket details (with comments, attachments, history)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Ticket } }
+    patch:
+      tags: [Tickets]
+      summary: Update ticket fields
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Updated } }
+  /tickets/{id}/assign:
+    post:
+      tags: [Tickets]
+      summary: Assign ticket to an agent (staff)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [assignedToId], properties: { assignedToId: { type: string }, note: { type: string } } }
+      responses: { '200': { description: Assigned } }
+  /tickets/{id}/auto-assign:
+    post:
+      tags: [Tickets]
+      summary: Auto-assign to the least-busy active agent (staff)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Assigned } }
+  /tickets/{id}/status:
+    patch:
+      tags: [Tickets]
+      summary: Change ticket status (workflow-validated)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [status], properties: { status: { type: string }, note: { type: string } } }
+      responses: { '200': { description: Updated } }
+  /tickets/{id}/priority:
+    patch:
+      tags: [Tickets]
+      summary: Change priority (recomputes SLA) (staff)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Updated } }
+  /tickets/{id}/escalate:
+    post:
+      tags: [Tickets]
+      summary: Escalate a ticket (staff)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Escalated } }
+  /tickets/{id}/user-escalate:
+    post:
+      tags: [Tickets]
+      summary: Owner escalates to management (only after the ticket is >15 days old)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Escalated } }
+  /tickets/{id}/merge:
+    post:
+      tags: [Tickets]
+      summary: Merge source tickets into this one (admin/manager)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Merged } }
+  /tickets/{id}/attachments:
+    post:
+      tags: [Tickets]
+      summary: Upload an attachment (multipart/form-data, field "file")
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          multipart/form-data:
+            schema: { type: object, properties: { file: { type: string, format: binary } } }
+      responses: { '201': { description: Uploaded } }
+
+  /comments/ticket/{ticketId}:
+    get:
+      tags: [Comments]
+      summary: List comments (internal notes hidden from end users)
+      parameters: [{ in: path, name: ticketId, required: true, schema: { type: string } }]
+      responses: { '200': { description: Comments } }
+    post:
+      tags: [Comments]
+      summary: Add a comment / reply
+      parameters: [{ in: path, name: ticketId, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [message], properties: { message: { type: string }, visibility: { type: string, enum: [PUBLIC, INTERNAL] } } }
+      responses: { '201': { description: Created } }
+
+  /categories:
+    get:
+      tags: [Categories]
+      summary: List categories with subcategories
+      responses: { '200': { description: Categories } }
+    post:
+      tags: [Categories]
+      summary: Create a category (admin/manager)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string }, description: { type: string } } }
+      responses: { '201': { description: Created } }
+  /categories/{id}:
+    patch:
+      tags: [Categories]
+      summary: Update a category (admin/manager)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Updated } }
+    delete:
+      tags: [Categories]
+      summary: Delete a category (admin/manager)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Deleted } }
+  /categories/{id}/assignee:
+    patch:
+      tags: [Categories]
+      summary: Set the default auto-assign agent for a category (admin/manager)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { assigneeId: { type: string, nullable: true } } }
+      responses: { '200': { description: Updated } }
+  /categories/subcategories:
+    post:
+      tags: [Categories]
+      summary: Create a subcategory (admin/manager)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [categoryId, name], properties: { categoryId: { type: string }, name: { type: string } } }
+      responses: { '201': { description: Created } }
+  /categories/subcategories/{id}:
+    patch:
+      tags: [Categories]
+      summary: Rename a subcategory (admin/manager)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Updated } }
+    delete:
+      tags: [Categories]
+      summary: Delete a subcategory (admin/manager)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Deleted } }
+
+  /users:
+    get:
+      tags: [Users]
+      summary: List all users (admin/manager)
+      responses: { '200': { description: Paginated users } }
+  /users/agents:
+    get:
+      tags: [Users]
+      summary: List active agents (staff)
+      responses: { '200': { description: Agents } }
+    post:
+      tags: [Users]
+      summary: Create a user/agent/manager/admin (admin/manager; admin-only for ADMIN role)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string }
+                email: { type: string }
+                password: { type: string }
+                role: { type: string, enum: [USER, SUPPORT_AGENT, MANAGER, ADMIN] }
+                department: { type: string }
+      responses: { '201': { description: Created } }
+  /users/agents/{id}:
+    patch:
+      tags: [Users]
+      summary: Update an agent/user (admin/manager)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Updated } }
+  /users/customers:
+    get:
+      tags: [Users]
+      summary: List end-users (staff; for raising tickets on behalf)
+      responses: { '200': { description: Customers } }
+  /users/agents/overview:
+    get:
+      tags: [Users]
+      summary: Agent performance leaderboard (admin/manager)
+      responses: { '200': { description: Overview } }
+  /users/agents/{id}/stats:
+    get:
+      tags: [Users]
+      summary: Detailed performance stats for one agent (admin/manager)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Stats } }
+
+  /dashboard:
+    get:
+      tags: [Dashboard]
+      summary: Role-aware dashboard stats (cards + charts for staff)
+      responses: { '200': { description: Stats } }
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: List notifications (includes unreadCount)
+      responses: { '200': { description: Notifications } }
+  /notifications/{id}/read:
+    patch:
+      tags: [Notifications]
+      summary: Mark one notification read
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: OK } }
+  /notifications/read-all:
+    patch:
+      tags: [Notifications]
+      summary: Mark all notifications read
+      responses: { '200': { description: OK } }
+
+  /knowledge-base:
+    get:
+      tags: [KnowledgeBase]
+      summary: List articles (published only for end users)
+      parameters:
+        - { in: query, name: search, schema: { type: string } }
+        - { in: query, name: category, schema: { type: string } }
+      responses: { '200': { description: Articles } }
+    post:
+      tags: [KnowledgeBase]
+      summary: Create an article (admin/manager)
+      responses: { '201': { description: Created } }
+  /knowledge-base/{slug}:
+    get:
+      tags: [KnowledgeBase]
+      summary: Get an article by slug (with attachments; increments views)
+      parameters: [{ in: path, name: slug, required: true, schema: { type: string } }]
+      responses: { '200': { description: Article } }
+  /knowledge-base/{id}:
+    patch:
+      tags: [KnowledgeBase]
+      summary: Update an article (admin/manager)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Updated } }
+    delete:
+      tags: [KnowledgeBase]
+      summary: Delete an article (admin/manager)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      responses: { '200': { description: Deleted } }
+  /knowledge-base/{id}/attachments:
+    post:
+      tags: [KnowledgeBase]
+      summary: Upload an attachment to an article (multipart, field "file") (admin/manager)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          multipart/form-data:
+            schema: { type: object, properties: { file: { type: string, format: binary } } }
+      responses: { '201': { description: Uploaded } }
+  /knowledge-base/attachments/{attId}:
+    delete:
+      tags: [KnowledgeBase]
+      summary: Delete an article attachment (admin/manager)
+      parameters: [{ in: path, name: attId, required: true, schema: { type: string } }]
+      responses: { '200': { description: Deleted } }
+
+  /sla:
+    get:
+      tags: [SLA]
+      summary: List SLA configurations (staff)
+      responses: { '200': { description: SLA configs } }
+    put:
+      tags: [SLA]
+      summary: Upsert SLA config for a priority (admin/manager)
+      responses: { '200': { description: Updated } }
+
+  /audit-logs:
+    get:
+      tags: [Audit]
+      summary: List audit logs with filters (admin/manager)
+      parameters:
+        - { in: query, name: action, schema: { type: string } }
+        - { in: query, name: entityType, schema: { type: string } }
+        - { in: query, name: dateFrom, schema: { type: string, format: date-time } }
+        - { in: query, name: dateTo, schema: { type: string, format: date-time } }
+      responses: { '200': { description: Audit logs } }
+
+  /reports/{type}:
+    get:
+      tags: [Reports]
+      summary: Report data by type
+      description: 'type ∈ tickets-by-category | tickets-by-agent | agent-performance | resolution-time | sla-breaches | monthly-trends | ticket-audit-log. Agents are auto-scoped to their own data.'
+      parameters:
+        - { in: path, name: type, required: true, schema: { type: string } }
+        - { in: query, name: duration, schema: { type: string, enum: [all, daily, weekly, monthly, annually] } }
+      responses: { '200': { description: Report rows } }
+  /reports/export:
+    get:
+      tags: [Reports]
+      summary: Export a report as a file
+      parameters:
+        - { in: query, name: type, required: true, schema: { type: string } }
+        - { in: query, name: format, required: true, schema: { type: string, enum: [csv, excel, pdf] } }
+        - { in: query, name: duration, schema: { type: string } }
+      responses:
+        '200': { description: Binary file download }
